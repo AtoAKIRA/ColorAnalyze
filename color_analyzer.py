@@ -4,26 +4,29 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
-import heap
 import utils
+import cie2000
 
 class analyzer(object):
-    def __init__(self, path, bin_num = 10, bin_thresh = 10):
+    def __init__(self, file_list, file_path, bin_num = 10, bin_thresh = 10):
         self.bin_num = bin_num          # hsv空间所能分辨的颜色种类
         self.bin_thresh = bin_thresh    # 统计时每张图中，某一颜色的self.bin_num少于多少时被忽略
         self.bin_w = 24                 # 绘制直方图的宽度
 
-        self.path = path
+        self.path = file_path
+        self.file_list = file_list
         self.file_num = 0
         self.images = []
-        self.color = {}
+        self.rgb = {}
 
         ## 可能图片名中既有white也有green，导致图片没有被分析直接定义为white
         ## 所以在有如下颜色时，需要分析图片
         self.enable_calc_color = ['GREEN', 'RED', 'BLUE', 'YELLOW', 'ORANGE', 'NAVY', 'PURPLE', 'YELLOW', 'CORAL']
 
+        self.run()
+
     def _find_exist_color_top_k(self, hist ,top_k):
-        tk = heap.top_k_heap(top_k)
+        tk = utils.top_k_heap(top_k)
         for i in xrange(self.bin_num):
             tk.push(hist[i])
         return tk.top_k()
@@ -50,11 +53,12 @@ class analyzer(object):
             h = hist[i] = int(hist[i])  # hist中的float数量变成int，便于计算
 
             cv2.rectangle(img, (i*self.bin_w+2, 255), ((i+1)*self.bin_w-2, 255-h), (int(180.0*i/self.bin_num), 255, 255), -1)
-        return cv2.cvtColor(img, cv2.COLOR_HSV2BGR)
-        
+        bgr = cv2.cvtColor(img, cv2.COLOR_HSV2BGR)
+        return bgr
+
     def _calc_hist(self, hist):
         img = self._draw_hist(hist)
-        cv2.imshow('hist', img)
+    #    cv2.imshow('rgb', img)
 
     ############## 找出最大的几个颜色的rgb以及比例 ##############
     ## 先抽取hist中出现最多的几个bin
@@ -71,7 +75,7 @@ class analyzer(object):
     ## 计算bin中各个颜色所占比例
         percent = self._calc_color_percent(color, hist[color_index])
 
-    ## 默认的rgb顺序是反的，所以需要反转一下color数据
+    ## opencv bgr to rgb
         for i in range(len(color)):
             tmp = color[i]
             first = tmp[0]
@@ -92,16 +96,69 @@ class analyzer(object):
 
     def _calc_color(self, image):   
         image,mask = self._extract_object_area(image)
-        cv2.imshow('object', image)
-        ## 计算hsv空间的直方图
+    #    cv2.imshow('object', image)
+        ## calc hist in hsv
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist( [hsv], [0], mask, [self.bin_num], [0, 180] )
+     #   cv2.imshow('hsv', hist)
         cv2.normalize(hist, hist, 0, 255, cv2.NORM_MINMAX)      # 每张图的像素不一样，需要正则化
 
         ## 从直方图中计算颜色比例
         return self._calc_hist(hist)    #.reshape(-1))
 
-    def _load_image(self):
+    # 直接从self.file_list里获取文件路径，并读取image
+    def _load_image_from_list(self):
+        for i in self.file_list:
+            tmp1,tmp2 = None, None
+            cnt1,cnt2 = 50,50
+            upper_str = i.upper()
+
+            enable_calc = True
+
+            if 'PANDA' in upper_str or ('BLACK' in upper_str and 'WHITE' in upper_str):
+                tmp1 = tuple((0,0,0))
+                tmp2 = tuple((250,250,250))
+                cnt1 = cnt2 = 25
+                enable_calc = False
+            elif 'BLACK' in upper_str or 'ブラック' in upper_str:
+                tmp1 = tuple((0,0,0))
+                enable_calc = False
+            elif 'WHITE' in upper_str or '白' in upper_str:
+                tmp1 = tuple((250,250,250))
+                enable_calc = False
+            elif 'GRAY'in upper_str or 'グレー' in upper_str:
+                tmp1 = tuple((192,192,192))
+                enable_calc = False
+            else:
+                pass
+
+            for word in self.enable_calc_color:
+                if word in upper_str:
+                    print "!!!"
+                    enable_calc = True
+
+            # 如果此图片是无法分辨的颜色，直接指定它的颜色和比例
+            if enable_calc == False:
+                print "pass calc ......"
+                if self.rgb.has_key(tmp1):
+                    self.rgb[tmp1] = self.rgb[tmp1] + cnt1
+                else:
+                    self.rgb[tmp1] = cnt1
+
+                if tmp2 is not None:
+                    if self.rgb.has_key(tmp2):
+                        self.rgb[tmp2] = self.rgb[tmp2] + cnt2
+                    else:
+                        self.rgb[tmp2] = cnt2
+
+            else:
+                print "calc ......"
+                print i
+                self.images.append(cv2.imread(i))
+            
+            self.file_num += 1
+
+    def _load_image_from_path(self):
         files = []
         if os.path.isdir(self.path):
             for _,_,f in os.walk(self.path):
@@ -126,13 +183,13 @@ class analyzer(object):
                 tmp2 = tuple((250,250,250))
                 cnt1 = cnt2 = 25
                 enable_calc = False
-            elif 'BLACK' in upper_str or 'ブラック' in upper_str:
+            elif 'BLACK' in upper_str or 'ブラック' in upper_str:
                 tmp1 = tuple((0,0,0))
                 enable_calc = False
-            elif 'WHITE' in upper_str:
+            elif 'WHITE' in upper_str or '白' in upper_str:
                 tmp1 = tuple((250,250,250))
                 enable_calc = False
-            elif 'GRAY'in upper_str:
+            elif 'GRAY'in upper_str or 'グレー' in upper_str:
                 tmp1 = tuple((192,192,192))
                 enable_calc = False
             else:
@@ -140,16 +197,16 @@ class analyzer(object):
 
             # 如果此图片是无法分辨的颜色，直接指定它的颜色和比例
             if enable_calc == False:
-                if self.color.has_key(tmp1):
-                    self.color[tmp1] = self.color[tmp1] + cnt1
+                if self.rgb.has_key(tmp1):
+                    self.rgb[tmp1] = self.rgb[tmp1] + cnt1
                 else:
-                    self.color[tmp1] = cnt1
+                    self.rgb[tmp1] = cnt1
 
                 if tmp2 is not None:
-                    if self.color.has_key(tmp2):
-                        self.color[tmp2] = self.color[tmp2] + cnt2
+                    if self.rgb.has_key(tmp2):
+                        self.rgb[tmp2] = self.rgb[tmp2] + cnt2
                     else:
-                        self.color[tmp2] = cnt2
+                        self.rgb[tmp2] = cnt2
             
             else:
                 # 如果颜色可分辨，则之后再分析颜色
@@ -160,29 +217,29 @@ class analyzer(object):
             color, percent = self._calc_color(i)
             for j in range(len(color)):
                 tmp = tuple(color[j])
-                if self.color.has_key(tmp):
-                    self.color[tmp] = self.color[tmp] + percent[j]
+                if self.rgb.has_key(tmp):
+                    self.rgb[tmp] = self.rgb[tmp] + percent[j]
                 else:
-                    self.color[tmp] = percent[j]
+                    self.rgb[tmp] = percent[j]
 
     def _show_plot(self):
         colors = []
         occupy = []
 
-        for k,v in self.color.items():
-        #   print ('%s = %d'%(k, float(v)/obj.file_num))
+        for k,v in self.rgb.items():
+            print ('%s = %d'%(k, float(v)/self.file_num))
             c = utils.rgb2hex(k)
             colors.append(c)
             occupy.append(v)
             cv2.waitKey()
-            #cv2.destroyAllWindows()
+            cv2.destroyAllWindows()
 
         plt.bar(range(len(occupy)), occupy, color=list(colors))
         plt.show()
 
     def run(self):
-        self._load_image()
+        self._load_image_from_list()
         self._count_color()
-        self._show_plot()
+     #   self._show_plot()
 
  
